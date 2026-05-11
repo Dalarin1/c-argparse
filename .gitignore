@@ -1,0 +1,6 @@
+.clang-format
+*.bat
+*.py
+*.exe
+*.c
+*.cpp
