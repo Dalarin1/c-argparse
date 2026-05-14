@@ -192,42 +192,6 @@ add_argument(parser, "-f --files", &files,
 // files = NULL, files_count = 0
 ```
 
-### Комплексный пример
-
-```c
-int main(int argc, char **argv) {
-    ArgumentParser *parser = parser_new("converter", "File format converter");
-
-    char *input = NULL;
-    char *output = NULL;
-    bool verbose = false;
-    int *dimensions = NULL;
-    
-    add_argument(parser, "input", &input);
-    add_argument(parser, "output", &output);
-    add_argument(parser, "-v --verbose", &verbose, .type=ARG_BOOL);
-    add_argument(parser, "-d --dimensions", &dimensions, .type=ARG_INT, .nargs=2);
-
-    parse_args(parser, argc - 1, argv + 1);
-
-    printf("Input: %s\n", input);
-    printf("Output: %s\n", output);
-    if (verbose) printf("Verbose mode ON\n");
-    if (dimensions) printf("Dimensions: %dx%d\n", dimensions[0], dimensions[1]);
-
-    parser_free(parser);
-    return 0;
-}
-```
-
-```bash
-$ ./converter input.png output.jpg -v -d 800 600
-Input: input.png
-Output: output.jpg
-Verbose mode ON
-Dimensions: 800x600
-```
-
 ## Важные замечания
 
 ### Управление памятью
