@@ -6,7 +6,70 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define add_argument(parser, flags, dest, ...)                                                     \
+    __add_argument_base(parser, flags, dest, (ArgumentOptions){__VA_ARGS__})
+
+typedef struct {
+    char **items;
+    size_t count;
+} StringSplitResult;
+
+void free_split_result(StringSplitResult *res) {
+    if (!res) {
+        return;
+    }
+    for (size_t i = 0; i < res->count; i++) {
+        free(res->items[i]);
+    }
+
+    free(res->items);
+    res->items = NULL;
+    res->count = 0;
+}
+
+StringSplitResult string_split(const char *str) {
+    StringSplitResult result = {0};
+
+    size_t len = strlen(str);
+    bool inside_word = false;
+    size_t word_begin = 0;
+
+    for (size_t i = 0; i <= len; i++) {
+        char c = (i < len) ? str[i] : ' ';
+        if (!inside_word && c != ' ') {
+            inside_word = true;
+            word_begin = i;
+        }
+
+        if (inside_word && c == ' ') {
+            inside_word = false;
+            size_t word_len = i - word_begin;
+            char **tmp = (char **)realloc(result.items, (result.count + 1) * sizeof(char *));
+
+            if (!tmp) {
+                free_split_result(&result);
+                return (StringSplitResult){0};
+            }
+
+            result.items = tmp;
+            result.items[result.count] = (char *)malloc(word_len + 1);
+
+            if (!result.items[result.count]) {
+                free_split_result(&result);
+                return (StringSplitResult){0};
+            }
+
+            memcpy(result.items[result.count], str + word_begin, word_len);
+            result.items[result.count][word_len] = '\0';
+            result.count++;
+        }
+    }
+
+    return result;
+}
+
 typedef enum ArgumentType {
+    ARG_BOOL,
     ARG_CHAR,
     ARG_UCHAR,
     ARG_INT,
@@ -16,17 +79,28 @@ typedef enum ArgumentType {
     ARG_LONG_LONG,
     ARG_ULONG_LONG,
     ARG_STRING,
-    ARG_BOOL,
     ARG_FLOAT,
     ARG_DOUBLE,
 } ArgumentType;
 
+typedef enum {
+    ACTION_STORE,       // default
+    ACTION_STORE_CONST, // --flag (сохранить константу)
+    ACTION_STORE_TRUE,  // --verbose (сохранить true)
+    ACTION_STORE_FALSE,
+    ACTION_APPEND, // можно указать несколько раз
+    ACTION_APPEND_CONST,
+    ACTION_COUNT, // -vvv -> 3
+    ACTION_HELP,
+    ACTION_VERSION
+} ArgumentAction;
+
 typedef enum NargsType {
-    NARGS_NONE,      // default single arg
-    NARGS_CONST,     // exactly N values
-    NARGS_ZERO_PLUS, // * — zero or more
-    NARGS_ONE_PLUS,  // + — one or more
-    NARGS_OPTIONAL,  // ? — zero or one
+    NARGS_NONE,           // default single arg
+    NARGS_CONST,          // exactly N values
+    NARGS_ZERO_PLUS = -1, // * — zero or more
+    NARGS_ONE_PLUS = -2,  // + — one or more
+    NARGS_OPTIONAL = -3,  // ? — zero or one
 } NargsType;
 
 typedef struct Argument {
@@ -36,11 +110,12 @@ typedef struct Argument {
     ArgumentType type;
     void *dest;
     bool has_value;
+    bool required;
     /* for nargs != none */
     int *dest_arr_count;
     NargsType nargs_type;
     int nargs_count;
-
+    ArgumentAction action;
 } Argument;
 
 void argument_read_value(Argument *arg, char *strval, bool to_arr, int arr_idx) {
@@ -161,6 +236,7 @@ void parser_free(ArgumentParser *parser) {
 bool isalphanum(char c) {
     return ('0' <= c && c <= '9') || ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z');
 }
+
 bool isprefix(ArgumentParser *parser, char c) {
     for (size_t i = 0; i < parser->prefix_chars_size; i++) {
         if (c == parser->prefix_chars[i]) {
@@ -169,6 +245,7 @@ bool isprefix(ArgumentParser *parser, char c) {
     }
     return false;
 }
+
 Argument *findflag(ArgumentParser *parser, char *str) {
     for (size_t i = 0; i < parser->args_count; i++) {
         for (size_t j = 0; j < parser->args[i].flags_count; j++) {
@@ -179,6 +256,7 @@ Argument *findflag(ArgumentParser *parser, char *str) {
     }
     return NULL;
 }
+
 int get_argtype_size(ArgumentType type) {
     switch (type) {
     case ARG_CHAR:
@@ -204,103 +282,6 @@ int get_argtype_size(ArgumentType type) {
     default:
         break;
     }
-}
-/// @brief
-/// @param parser
-/// @param flags набор флагов, которые будут ассоциированы с данным аргументом
-///
-/// Опциональные аргументы следует передавать набором слов, разделённых пробелом, и они ОБЯЗАНЫ
-/// именть parser->prefix в начале.
-///
-/// Позиционные аргументы следует передавать ОДНИМ словом без пробелов, и аргумент не должен
-/// начинаться с parser->prefix
-/// @param argtype тип данных, который будет храниться после parse_args
-void add_argument(ArgumentParser *parser, const char *flags, ArgumentType argtype, void *dest) {
-    /* append arg to parser */
-
-    Argument *tmp = (Argument *)malloc((parser->args_count + 1) * sizeof(Argument));
-    memcpy(tmp, parser->args, parser->args_count * sizeof(Argument));
-    free(parser->args);
-    parser->args = tmp;
-    parser->args_count++;
-
-    /* parse argument data */
-
-    Argument *arg = &(parser->args[parser->args_count - 1]);
-    memset(arg, 0, sizeof(Argument));
-    char **arg_flags = NULL;
-    size_t arg_count = 0;
-
-    size_t f_len = strlen(flags);
-    bool inside_word = false;
-    size_t word_begin = 0;
-
-    for (size_t i = 0; i <= f_len; i++) {
-        char c = (i < f_len) ? flags[i] : ' ';
-
-        if (!inside_word && (isalphanum(c) || isprefix(parser, c) || c == '_')) {
-            inside_word = true;
-            word_begin = i;
-        }
-
-        if (inside_word && c == ' ') {
-            inside_word = false;
-            size_t word_len = i - word_begin;
-
-            char **new_addr = (char **)malloc((arg_count + 1) * sizeof(char *));
-            if (arg_flags) {
-                for (size_t ii = 0; ii < arg_count; ii++) {
-                    new_addr[ii] = arg_flags[ii];
-                }
-                free(arg_flags);
-            }
-            arg_flags = new_addr;
-
-            arg_flags[arg_count] = (char *)malloc(word_len + 1);
-            for (size_t j = 0; j < word_len; j++) {
-                if (j == 0) {
-                    bool pref = isprefix(parser, flags[word_begin + j]);
-                    if (!arg->is_optional && pref) {
-                        arg->is_optional = true;
-                    }
-                    if (arg->is_optional && !pref) {
-                        fprintf(stderr, "All of optional flags must start with prefix");
-                        if (parser->exit_on_error) {
-                            exit(-1);
-                        }
-                    }
-                    if (!arg->is_optional && !pref && arg_count >= 1) {
-                        fprintf(
-                            stderr,
-                            "Positional argument should be only one given in _flags_ parameter");
-                        if (parser->exit_on_error) {
-                            exit(-1);
-                        }
-                    }
-                }
-                arg_flags[arg_count][j] = flags[word_begin + j];
-            }
-            arg_flags[arg_count][word_len] = '\0';
-            arg_count++;
-        }
-    }
-
-    arg->flags = arg_flags;
-    arg->flags_count = arg_count;
-    arg->type = argtype;
-    arg->dest = dest;
-}
-
-/* TODO think of better architecture, maybe do __VA_ARGS__ thing */
-void add_argument_n(ArgumentParser *parser, const char *flags, ArgumentType argtype, void *dest,
-                    NargsType nargs_type, int nargs_count, int *dest_count) {
-
-    add_argument(parser, flags, argtype, dest);
-    Argument *arg = &parser->args[parser->args_count - 1];
-
-    arg->nargs_type = nargs_type;
-    arg->nargs_count = nargs_count;
-    arg->dest_arr_count = dest_count;
 }
 
 void parse_args(ArgumentParser *parser, int argc, char **args) {
@@ -467,6 +448,75 @@ void parse_args(ArgumentParser *parser, int argc, char **args) {
             if (parser->exit_on_error) {
                 exit(-1);
             }
+        }
+    }
+}
+
+typedef struct {
+    ArgumentAction action;
+    ArgumentType type;
+    NargsType nargs;
+    bool required;
+    int count;
+    int *dest_count;
+} ArgumentOptions;
+
+void validate_arg_flags(ArgumentParser *parser, Argument *arg) {
+    for (size_t i = 0; i < arg->flags_count; i++) {
+        char *flag = arg->flags[i];
+
+        bool pref = isprefix(parser, flag[0]);
+
+        if (!arg->is_optional && pref) {
+            arg->is_optional = true;
+        }
+
+        if (arg->is_optional && !pref) {
+            fprintf(stderr, "All optional flags must start with prefix");
+            if (parser->exit_on_error) {
+                exit(-1);
+            }
+        }
+
+        if (!arg->is_optional && !pref && i >= 1) {
+            fprintf(stderr, "Positional argument should be only one "
+                            "given in _flags_ parameter");
+
+            if (parser->exit_on_error) {
+                exit(-1);
+            }
+        }
+    }
+}
+
+void __add_argument_base(ArgumentParser *parser, const char *flags, void *dest,
+                         ArgumentOptions opt) {
+    parser->args = (Argument *)realloc(parser->args, (parser->args_count + 1) * sizeof(Argument));
+    parser->args_count++;
+
+    Argument *arg = &(parser->args[parser->args_count - 1]);
+    memset(arg, 0, sizeof(Argument));
+
+    StringSplitResult res = string_split(flags);
+
+    arg->flags = res.items;
+    arg->flags_count = res.count;
+
+    validate_arg_flags(parser, arg);
+
+    arg->dest = dest;
+    arg->type = opt.type;
+    arg->action = opt.action;
+    if (opt.required) {
+        arg->required = opt.required;
+        arg->is_optional = false;
+    }
+
+    arg->nargs_type = opt.nargs;
+    if (opt.nargs >= 0) { // NONE OR CONST
+        if (opt.count) {
+            arg->nargs_type = NARGS_CONST;
+            arg->nargs_count = opt.count;
         }
     }
 }

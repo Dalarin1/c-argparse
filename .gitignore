@@ -4,3 +4,5 @@
 *.exe
 *.c
 *.cpp
+/flag
+/.vscode
