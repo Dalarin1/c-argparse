@@ -2,21 +2,48 @@
 
 Простая C библиотека для парсинга аргументов командной строки в стиле Python argparse.
 
-## Основы
+## Использование
 
 ```c
-#include "shit_argparse.h"
+#include "argparse.h"
 
 int main(int argc, char **argv) {
-    ArgumentParser *parser = parser_new("myapp", "Description of my app");
+    ArgumentParser parser = parser_new();
+
+
+    // single optional string flag
+    char *name = NULL;
+    add_argument(parser, "-n --name", &name);
+
+    // single positional string parameter
+    char* oleg = NULL;
+    add_argument(parser, "oleg", &oleg);
+
+    // optional bool flag
+    bool yes;
+    add_argument(parser, "-y", &yes, .type=ARG_BOOL);
     
-    // добавляем аргументы
-    add_argument(parser, "...", &variable, .type=..., .nargs=...);
-    
-    // парсим
+    // optional integer array flag with const lenght
+    int* ages_arr = NULL;
+    add_argument(parser, "-a --ages -aa ---ag", &ages_arr, 
+                .type=ARG_INT,
+                .nargs=5);
+
+    // optional float array flag with variadic length with elements count >= 1
+    // example:
+    // main -b 11.0 will end with biases_cont = 1
+    // main -b 11.0 12.0 will end with biases_count = 2
+    // main -b will drop with error
+
+    float* biases = NULL;
+    int biases_count = 0;
+    add_argument(parser, "-b -biases --bb", &ages_arr, 
+                .type=ARG_FLOAT,
+                .nargs=NARGS_ONE_PLUS,
+                .dest_count = &biases_count);
+
     parse_args(parser, argc - 1, argv + 1);
-    
-    // освобождаем память
+
     parser_free(parser);
 }
 ```
