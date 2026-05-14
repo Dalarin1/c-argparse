@@ -1,8 +1,8 @@
 # SHIT - ARGPARSE
 
-Простая C библиотека для парсинга аргументов командной строки в стиле Python argparse.
+Simple C library for parsing command-line arguments in Python argparse style.
 
-## Использование
+## Usage
 
 ```c
 #include "argparse.h"
@@ -56,30 +56,30 @@ int main(int argc, char **argv) {
 ArgumentParser *parser_new(const char *prog, const char *description);
 ```
 
-- `prog` — имя программы (может быть NULL)
-- `description` — описание (может быть NULL)
+- `prog` — program name (can be NULL)
+- `description` — description (can be NULL)
 
 ### add_argument()
 
 ```c
 add_argument(
     ArgumentParser *parser,
-    const char *flags,      // через пробел: "-n --name"
-    void *dest,             // куда сохранить результат
-    ...                     // опциональные параметры
+    const char *flags,      // space-delimited: "-n --name"
+    void *dest,             // where to store the result
+    ...                     // optional parameters
 )
 ```
 
-**Опциональные параметры:**
+**Optional parameters:**
 
-| Параметр | Тип | По умолчанию | Описание |
+| Parameter | Type | Default | Description |
 | ---------- | ----- | -------------- | ---------- |
-| `.type` | `ArgumentType` | `ARG_STRING` | Тип аргумента |
-| `.action` | `ArgumentAction` | `ACTION_STORE` | Действие при парсинге |
-| `.nargs` | `NargsType` или `int` | `NARGS_NONE` | Количество значений |
-| `.required` | `bool` | `false` | Обязателен ли аргумент |
-| `.count` | `int` | `0` | Точное количество значений (для `NARGS_CONST`) |
-| `.dest_count` | `int *` | `NULL` | Куда записать фактическое количество значений |
+| `.type` | `ArgumentType` | `ARG_STRING` | Argument type |
+| `.action` | `ArgumentAction` | `ACTION_STORE` | Parsing action |
+| `.nargs` | `NargsType` or `int` | `NARGS_NONE` | Number of values |
+| `.required` | `bool` | `false` | Whether the argument is required |
+| `.count` | `int` | `0` | Exact number of values (for `NARGS_CONST`) |
+| `.dest_count` | `int *` | `NULL` | Where to write the actual number of values |
 
 ### ArgumentType
 
@@ -101,32 +101,32 @@ ARG_DOUBLE
 ### NargsType
 
 ```c
-NARGS_NONE          // одно значение (default)
-NARGS_CONST         // точное количество (задаётся через .count)
-NARGS_ZERO_PLUS     // 0 или более (*)
-NARGS_ONE_PLUS      // 1 или более (+)
-NARGS_OPTIONAL      // 0 или 1 (?)
+NARGS_NONE          // single value (default)
+NARGS_CONST         // exact count (specified via .count)
+NARGS_ZERO_PLUS     // 0 or more (*)
+NARGS_ONE_PLUS      // 1 or more (+)
+NARGS_OPTIONAL      // 0 or 1 (?)
 ```
 
-Или можно указать целое число `>= 0` напрямую в `.nargs=5`.
+Or you can specify an integer `>= 0` directly in `.nargs=5`.
 
 ### ArgumentAction
 
 ```c
-ACTION_STORE         // сохранить значение (default)
+ACTION_STORE         // store value (default)
 ACTION_STORE_CONST   
 ACTION_STORE_TRUE    
 ACTION_STORE_FALSE   
-ACTION_APPEND        // позволяет указывать флаг несколько раз
+ACTION_APPEND        // allows specifying flag multiple times
 ACTION_APPEND_CONST  
-ACTION_COUNT         // подсчитать количество (-v -v -v → 3)
+ACTION_COUNT         // count occurrences (-v -v -v → 3)
 ACTION_HELP          
 ACTION_VERSION       
 ```
 
-## Примеры
+## Examples
 
-### Простой optional флаг
+### Simple optional flag
 
 ```c
 char *name = NULL;
@@ -135,7 +135,7 @@ add_argument(parser, "-n --name", &name);
 // name = "Alice"
 ```
 
-### Positional аргумент
+### Positional argument
 
 ```c
 char *filename = NULL;
@@ -144,7 +144,7 @@ add_argument(parser, "filename", &filename);
 // filename = "input.txt"
 ```
 
-### Boolean флаг
+### Boolean flag
 
 ```c
 bool verbose = false;
@@ -153,7 +153,7 @@ add_argument(parser, "-v --verbose", &verbose, .type=ARG_BOOL);
 // verbose = true
 ```
 
-### Массив фиксированной длины
+### Fixed-length array
 
 ```c
 int *coords = NULL;
@@ -162,7 +162,7 @@ add_argument(parser, "-c --coords", &coords, .type=ARG_INT, .nargs=3);
 // coords[0]=10, coords[1]=20, coords[2]=30
 ```
 
-### Массив переменной длины (1+)
+### Variable-length array (1+)
 
 ```c
 float *values = NULL;
@@ -176,7 +176,7 @@ add_argument(parser, "-v --values", &values,
 // values[] = {1.5, 2.3, 4.8}, count = 3
 ```
 
-### Массив переменной длины (0+)
+### Variable-length array (0+)
 
 ```c
 char **files = NULL;
@@ -192,13 +192,13 @@ add_argument(parser, "-f --files", &files,
 // files = NULL, files_count = 0
 ```
 
-## Важные замечания
+## Important Notes
 
-### Управление памятью
+### Memory Management
 
-- **Строки (`ARG_STRING`)** автоматически копируются через `strdup()` — **вы отвечаете за их освобождение**
-- **Массивы** выделяются через `malloc/realloc` — вы **отвечаете за их освобождение**
-- `parser_free()` освобождает только внутренние структуры парсера, **не пользовательские переменные**
+- **Strings (`ARG_STRING`)** are automatically copied via `strdup()` — **you are responsible for freeing them**
+- **Arrays** are allocated via `malloc/realloc` — **you are responsible for freeing them**
+- `parser_free()` only frees internal parser structures, **not user variables**
 
 ```c
 char *name = NULL;
@@ -208,25 +208,25 @@ add_argument(parser, "-n", &name);
 add_argument(parser, "-a", &ages, .type=ARG_INT, .nargs=3);
 parse_args(parser, argc - 1, argv + 1);
 
-// ваша работа:
+// your responsibility:
 free(name);
 free(ages);
 
-parser_free(parser);  // освобождает только парсер
+parser_free(parser);  // only frees the parser
 ```
 
-### Порядок positional аргументов
+### Positional argument order
 
-Positional аргументы парсятся **в порядке добавления** через `add_argument()`:
+Positional arguments are parsed **in the order they are added** via `add_argument()`:
 
 ```c
-add_argument(parser, "source", &src);     // первый
-add_argument(parser, "dest", &dst);       // второй
+add_argument(parser, "source", &src);     // first
+add_argument(parser, "dest", &dst);       // second
 // ./app file1.txt file2.txt
 // src="file1.txt",
 // dst="file2.txt"
 ```
 
-### Обработка ошибок
+### Error Handling
 
-По умолчанию при ошибке программа завершается через `exit(-1)`. Это контролируется полем `parser->exit_on_error` (по умолчанию `true`).
+By default, the program exits via `exit(-1)` on error. This is controlled by the `parser->exit_on_error` field (default `true`).
