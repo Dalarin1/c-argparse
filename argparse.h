@@ -136,6 +136,7 @@ typedef struct Argument {
     ArgumentValue const_val;
     ArgumentValue default_val;
 } Argument;
+
 int get_argtype_size(ArgumentType type) {
     switch (type) {
     case ARG_CHAR:
@@ -259,10 +260,6 @@ void parser_free(ArgumentParser *parser) {
     free((void *)parser);
 }
 
-bool isalphanum(char c) {
-    return ('0' <= c && c <= '9') || ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z');
-}
-
 bool isprefix(ArgumentParser *parser, char c) {
     for (size_t i = 0; i < parser->prefix_chars_size; i++) {
         if (c == parser->prefix_chars[i]) {
@@ -287,14 +284,14 @@ Argument *findnextpositional(ArgumentParser *parser) {
     Argument *arg = NULL;
     for (size_t j = 0; j < parser->args_count; j++) {
         arg = &parser->args[j];
-        if (arg->positional) {
+        if (arg->positional && !arg->has_value) {
             return arg;
         }
     }
     return NULL;
 }
 
-//clang-format off
+// clang-format off
 void set_arg_dest(Argument *arg, ArgumentValue value) {
     switch (arg->type) {
     case ARG_BOOL:       *(bool *)arg->dest = (value.b);                  break;
@@ -311,7 +308,7 @@ void set_arg_dest(Argument *arg, ArgumentValue value) {
     case ARG_STRING:     *(char **)arg->dest = strdup(value.s);           break;
     }
 }
-//clang-format on
+// clang-format on
 
 void append_value_to_dest(Argument *arg, ArgumentValue val) {
     int cur = arg->dest_arr_count ? *arg->dest_arr_count : 0;
@@ -323,7 +320,7 @@ void append_value_to_dest(Argument *arg, ArgumentValue val) {
         return;
     }
     *(void **)arg->dest = newbuf;
-//clang-format off
+    // clang-format off
     /* записываем значение в конец массива */
     void *slot = (char *)newbuf + cur * sz;
     switch (arg->type) {
@@ -344,9 +341,8 @@ void append_value_to_dest(Argument *arg, ArgumentValue val) {
     if (arg->dest_arr_count)
         (*arg->dest_arr_count)++;
 }
-//clang-format on
+// clang-format on
 
-/* считать одно строковое значение и вернуть как ArgumentValue */
 ArgumentValue strval_to_argval(Argument *arg, char *strval) {
     ArgumentValue v = {0};
     switch (arg->type) {
@@ -389,38 +385,21 @@ ArgumentValue strval_to_argval(Argument *arg, char *strval) {
     return v;
 }
 
-/* ────────────── вспомогательный макрос для инкремента счётчика ──────── */
-#define COUNT_INC(arg)                                                                             \
-    do {                                                                                           \
-        switch ((arg)->type) {                                                                     \
-        case ARG_CHAR:                                                                             \
-            (*(char *)(arg)->dest)++;                                                              \
-            break;                                                                                 \
-        case ARG_UCHAR:                                                                            \
-            (*(unsigned char *)(arg)->dest)++;                                                     \
-            break;                                                                                 \
-        case ARG_INT:                                                                              \
-            (*(int *)(arg)->dest)++;                                                               \
-            break;                                                                                 \
-        case ARG_UINT:                                                                             \
-            (*(unsigned int *)(arg)->dest)++;                                                      \
-            break;                                                                                 \
-        case ARG_LONG:                                                                             \
-            (*(long *)(arg)->dest)++;                                                              \
-            break;                                                                                 \
-        case ARG_ULONG:                                                                            \
-            (*(unsigned long *)(arg)->dest)++;                                                     \
-            break;                                                                                 \
-        case ARG_LONG_LONG:                                                                        \
-            (*(long long *)(arg)->dest)++;                                                         \
-            break;                                                                                 \
-        case ARG_ULONG_LONG:                                                                       \
-            (*(unsigned long long *)(arg)->dest)++;                                                \
-            break;                                                                                 \
-        default:                                                                                   \
-            break;                                                                                 \
-        }                                                                                          \
-    } while (0)
+// clang-format off
+void count_inc(Argument *arg) {
+
+    switch (arg->type) {
+    case ARG_CHAR:          (*(char *)(arg->dest))++;               break;
+    case ARG_UCHAR:         (*(unsigned char *)(arg->dest))++;      break;
+    case ARG_INT:           (*(int *)(arg->dest))++;                break;
+    case ARG_UINT:          (*(unsigned int *)(arg->dest))++;       break;
+    case ARG_LONG:          (*(long *)(arg->dest))++;               break;
+    case ARG_ULONG:         (*(unsigned long *)(arg->dest))++;      break;
+    case ARG_LONG_LONG:     (*(long long *)(arg->dest))++;          break;
+    case ARG_ULONG_LONG:    (*(unsigned long long *)(arg->dest))++; break;
+    }
+}
+// clang-format on
 
 void parse_args(ArgumentParser *parser, int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
@@ -545,8 +524,8 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
             }
         }
         // проверям всякое
-        if ((arg->action != ACTION_APPEND && arg->has_value) ||
-            (arg->action != ACTION_APPEND_CONST && arg->has_value) ||
+        if ((arg->action != ACTION_APPEND && arg->has_value) &&
+            (arg->action != ACTION_APPEND_CONST && arg->has_value) &&
             (arg->action != ACTION_COUNT)) {
             // перепоявление флага, атата
             fprintf(stderr, "error: argument %s: expected one argument", arg->flags[0]);
@@ -651,11 +630,11 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                             int offset = 0;
                             arg->nargs_count = 0;
                             do {
-
-                                *((void **)(arg->dest)) =
-                                    realloc(*((void **)(arg->dest)),
-                                            get_argtype_size(arg->type) *
-                                                (arg->nargs_count > 0 ? arg->nargs_count : 1));
+                                *((void **)(arg->dest)) = realloc(
+                                    *((void **)(arg->dest)),
+                                    get_argtype_size(arg->type) *
+                                        (arg->nargs_count > 0 ? arg->nargs_count
+                                                              : get_argtype_size(arg->type)));
                                 argument_read_value(arg, argv[i], true, offset);
                                 arg->nargs_count++;
                                 offset++;
@@ -687,7 +666,8 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
             arg->has_value = true;
         } break;
         case ACTION_COUNT: {
-            COUNT_INC(arg);
+            count_inc(arg);
+            arg->has_value = true;
         } break;
         case ACTION_APPEND: {
             i++;
@@ -797,6 +777,10 @@ void __add_argument_base(ArgumentParser *parser, const char *flags, void *dest,
         arg->required = false;
         arg->is_optional = true;
     }
+    if (!opt.required && !opt.optional) {
+        arg->required = arg->positional;
+        arg->is_optional = !arg->positional;
+    }
 
     arg->nargs_type = opt.nargs;
     if (opt.nargs > 0) { // CONST
@@ -824,9 +808,8 @@ void __add_argument_base(ArgumentParser *parser, const char *flags, void *dest,
         }
     }
 
-    if (!arg->is_optional &&
-        (arg->action != ACTION_STORE &&
-         arg->action != ACTION_APPEND)) { // wrong action for positional argument
+    if (arg->positional && (arg->action != ACTION_STORE &&
+                            arg->action != ACTION_APPEND)) { // wrong action for positional argument
         fprintf(stderr,
                 "error: wrong action for positional argument, supports only STORE and APPEND");
         if (parser->exit_on_error) {
