@@ -1,8 +1,5 @@
 .clang-format
 *.bat
 *.py
-*.exe
-*.c
-*.cpp
-/flag
+/tmp
 /.vscode
