@@ -311,10 +311,10 @@ void set_arg_dest(Argument *arg, ArgumentValue value) {
 // clang-format on
 
 void append_value_to_dest(Argument *arg, ArgumentValue val) {
-    int cur = arg->dest_arr_count ? *arg->dest_arr_count : 0;
+    int cur = arg->dest_arr_count ? *(arg->dest_arr_count) : 0;
     int sz = get_argtype_size(arg->type);
 
-    void *newbuf = realloc(*(void **)arg->dest, sz * (cur + 1));
+    void *newbuf = realloc(*(void **)(arg->dest), sz * (cur + 1));
     if (!newbuf) {
         perror("realloc");
         return;
@@ -337,11 +337,10 @@ void append_value_to_dest(Argument *arg, ArgumentValue val) {
     case ARG_DOUBLE:     *(double *)slot = val.d;               break;
     case ARG_STRING:     *(char **)slot = strdup(val.s);        break;
     }
-
+    // clang-format on
     if (arg->dest_arr_count)
         (*arg->dest_arr_count)++;
 }
-// clang-format on
 
 ArgumentValue strval_to_argval(Argument *arg, char *strval) {
     ArgumentValue v = {0};
@@ -446,64 +445,49 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                             argument_read_value(arg, argv[i], true, ii);
                         }
                     }
-                    i--;
-                    arg->has_value = true;
                     if (arg->dest_arr_count) {
                         *(arg->dest_arr_count) = arg->nargs_count;
                     }
                 } break;
                 case NARGS_ZERO_PLUS: {
-                    i++;
-                    if (i >= argc || findflag(parser, argv[i])) {
-                        i--;
-                    } else {
-                        if (!(*(void **)(arg->dest))) {
-                            *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
-                        }
-                        arg->nargs_count = 0;
-                        int offset = 0;
-                        while (i < argc && !findflag(parser, argv[i])) {
-                            *((void **)(arg->dest)) =
-                                realloc(*((void **)(arg->dest)),
-                                        get_argtype_size(arg->type) * (arg->nargs_count + 1));
-                            argument_read_value(arg, argv[i], true, offset);
-                            arg->nargs_count++;
-                            offset++;
-                            i++;
-                        }
-                        i--;
-                        *(arg->dest_arr_count) = arg->nargs_count;
+
+                    if (!(*(void **)(arg->dest))) {
+                        *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
                     }
+                    arg->nargs_count = 0;
+                    int offset = 0;
+                    while (i < argc && !findflag(parser, argv[i])) {
+                        *((void **)(arg->dest)) =
+                            realloc(*((void **)(arg->dest)),
+                                    get_argtype_size(arg->type) * (arg->nargs_count + 1));
+                        argument_read_value(arg, argv[i], true, offset);
+                        arg->nargs_count++;
+                        offset++;
+                        i++;
+                    }
+                    i--;
+                    *(arg->dest_arr_count) = arg->nargs_count;
 
                 } break;
                 case NARGS_ONE_PLUS: {
-                    i++;
-                    if (i >= argc || findflag(parser, argv[i])) {
-                        fprintf(stderr, "error: argument %s: expected at least 1 value",
-                                arg->flags[0]);
-                        if (parser->exit_on_error) {
-                            exit(-1);
-                        }
-                    } else {
-                        if (!(*(void **)(arg->dest))) {
-                            *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
-                        }
-                        int offset = 0;
-                        arg->nargs_count = 0;
-                        do {
 
-                            *((void **)(arg->dest)) =
-                                realloc(*((void **)(arg->dest)),
-                                        get_argtype_size(arg->type) *
-                                            (arg->nargs_count > 0 ? arg->nargs_count : 1));
-                            argument_read_value(arg, argv[i], true, offset);
-                            arg->nargs_count++;
-                            offset++;
-                            i++;
-                        } while (i < argc && !findflag(parser, argv[i]));
-                        i--;
-                        *(arg->dest_arr_count) = arg->nargs_count;
+                    if (!(*(void **)(arg->dest))) {
+                        *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
                     }
+                    int offset = 0;
+                    arg->nargs_count = 0;
+                    do {
+                        *((void **)(arg->dest)) =
+                            realloc(*((void **)(arg->dest)),
+                                    get_argtype_size(arg->type) *
+                                        (arg->nargs_count > 0 ? arg->nargs_count + 1 : 1));
+                        argument_read_value(arg, argv[i], true, offset);
+                        arg->nargs_count++;
+                        offset++;
+                        i++;
+                    } while (i < argc && !findflag(parser, argv[i]));
+                    i--;
+                    *(arg->dest_arr_count) = arg->nargs_count;
 
                 } break;
                 default:
@@ -630,13 +614,10 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                             int offset = 0;
                             arg->nargs_count = 0;
                             do {
-                                *((void **)(arg->dest)) = realloc(
-                                    *((void **)(arg->dest)),
-                                    get_argtype_size(arg->type) *
-                                        (arg->nargs_count > 0 ? arg->nargs_count
-                                                              : get_argtype_size(arg->type)));
+                                *((void **)(arg->dest)) =
+                                    realloc(*((void **)(arg->dest)),
+                                            get_argtype_size(arg->type) * arg->nargs_count++);
                                 argument_read_value(arg, argv[i], true, offset);
-                                arg->nargs_count++;
                                 offset++;
                                 i++;
                             } while (i < argc && !findflag(parser, argv[i]));
@@ -683,16 +664,17 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                 exit(-1);
             }
             append_value_to_dest(arg, strval_to_argval(arg, argv[i]));
+            arg->has_value = true;
         } break;
         case ACTION_APPEND_CONST: {
             append_value_to_dest(arg, arg->const_val);
+            arg->has_value = true;
         } break;
         default:
             break;
         }
     }
 
-    bool found = false;
     for (size_t j = 0; j < parser->args_count; j++) {
         Argument *arg = &parser->args[j];
         if (arg->required && !arg->has_value) {
@@ -729,7 +711,7 @@ void validate_arg_flags(ArgumentParser *parser, Argument *arg) {
         if (need_prefix) {
             prefix_count++;
         }
-        if (!arg->is_optional && !need_prefix && i >= 1) {
+        if (arg->positional && !need_prefix && i >= 1) {
             fprintf(stderr, "Positional argument should be only one "
                             "given in _flags_ parameter");
 
@@ -816,6 +798,7 @@ void __add_argument_base(ArgumentParser *parser, const char *flags, void *dest,
             exit(-1);
         }
     }
+    arg->has_value = false;
 }
 
 #endif // SHIT_ARGPARSE
