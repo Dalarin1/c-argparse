@@ -85,23 +85,39 @@ typedef enum ArgumentType {
 
 typedef enum {
     ACTION_STORE,       // default
-    ACTION_STORE_CONST, // --flag (сохранить константу)
+    ACTION_STORE_CONST, // --flag (no value), add .const=(value)
     ACTION_STORE_TRUE,  // --verbose (сохранить true)
     ACTION_STORE_FALSE,
-    ACTION_APPEND, // можно указать несколько раз
-    ACTION_APPEND_CONST,
-    ACTION_COUNT, // -vvv -> 3
+    ACTION_APPEND,       // можно указать несколько раз
+    ACTION_APPEND_CONST, // при использовании флага добавляет в массив(!) dest значение .const
+    ACTION_COUNT,        // -vvv -> 3
     ACTION_HELP,
     ACTION_VERSION
 } ArgumentAction;
 
 typedef enum NargsType {
-    NARGS_NONE,           // default single arg
-    NARGS_CONST,          // exactly N values
+    NARGS_NONE = 0,       // default single arg
+    NARGS_CONST = 1,      // exactly N values
     NARGS_ZERO_PLUS = -1, // * — zero or more
     NARGS_ONE_PLUS = -2,  // + — one or more
     NARGS_OPTIONAL = -3,  // ? — zero or one
 } NargsType;
+
+typedef union {
+    bool b;
+    char c;
+    unsigned char uc;
+    int i;
+    unsigned int ui;
+    long l;
+    unsigned long ul;
+    long long ll;
+    unsigned long long ull;
+    float f;
+    double d;
+    char *s;
+    void *ptr;
+} ArgumentValue;
 
 typedef struct Argument {
     char **flags;
@@ -109,6 +125,7 @@ typedef struct Argument {
     bool is_optional;
     ArgumentType type;
     void *dest;
+    bool positional;
     bool has_value;
     bool required;
     /* for nargs != none */
@@ -116,53 +133,62 @@ typedef struct Argument {
     NargsType nargs_type;
     int nargs_count;
     ArgumentAction action;
+    ArgumentValue const_val;
+    ArgumentValue default_val;
 } Argument;
-
-void argument_read_value(Argument *arg, char *strval, bool to_arr, int arr_idx) {
-    int offset = to_arr ? arr_idx : 0;
-    long long tmp = (long long)(arg->dest);
-    if (to_arr) {
-        arg->dest = *(void **)(arg->dest);
-    }
-    switch (arg->type) {
+int get_argtype_size(ArgumentType type) {
+    switch (type) {
     case ARG_CHAR:
-        *((char *)(arg->dest) + offset) = (char)atoi(strval);
-        break;
     case ARG_UCHAR:
-        *((unsigned char *)(arg->dest) + offset) = (unsigned char)atoi(strval);
-        break;
+        return sizeof(char);
     case ARG_INT:
-        *((int *)(arg->dest) + offset) = atoi(strval);
-        break;
     case ARG_UINT:
-        *((unsigned int *)(arg->dest) + offset) = (unsigned int)strtoul(strval, NULL, 10);
-        break;
+        return sizeof(int);
     case ARG_LONG:
-        *((long *)(arg->dest) + offset) = strtol(strval, NULL, 10);
-        break;
     case ARG_ULONG:
-        *((unsigned long *)(arg->dest) + offset) = strtoul(strval, NULL, 10);
-        break;
+        return sizeof(long);
     case ARG_LONG_LONG:
-        *((long long *)(arg->dest) + offset) = strtoll(strval, NULL, 10);
-        break;
     case ARG_ULONG_LONG:
-        *((unsigned long long *)(arg->dest) + offset) = strtoull(strval, NULL, 10);
-        break;
-    case ARG_FLOAT:
-        *((float *)(arg->dest) + offset) = strtof(strval, NULL);
-        break;
-    case ARG_DOUBLE:
-        *((double *)(arg->dest) + offset) = strtod(strval, NULL);
-        break;
+        return sizeof(long long);
     case ARG_STRING:
-        *((char **)(arg->dest) + offset) = strdup(strval);
+        return sizeof(char *);
+    case ARG_BOOL:
+        return sizeof(bool);
+    case ARG_FLOAT:
+        return sizeof(float);
+    case ARG_DOUBLE:
+        return sizeof(double);
+    default:
         break;
-    }
-    if (to_arr) {
-        arg->dest = (void *)(tmp);
     }
 }
+void *get_write_addr(Argument *arg, bool to_arr, int offset) {
+    if (to_arr) {
+        void *res = *(void **)arg->dest;
+        res = (char *)res + offset * get_argtype_size(arg->type);
+        return res;
+    }
+    return arg->dest;
+}
+// clang-format off
+void argument_read_value(Argument *arg, char *strval, bool to_arr, int arr_idx) {
+    void *write_addr = get_write_addr(arg, to_arr, arr_idx);
+
+    switch (arg->type) {
+    case ARG_CHAR:        *((char *)write_addr) = (char)atoi(strval);                               break;
+    case ARG_UCHAR:       *((unsigned char *)write_addr) = (unsigned char)atoi(strval);             break;
+    case ARG_INT:         *((int *)write_addr) = atoi(strval);                                      break;
+    case ARG_UINT:        *((unsigned int *)write_addr) = (unsigned int)strtoul(strval, NULL, 10);  break;
+    case ARG_LONG:        *((long *)write_addr) = strtol(strval, NULL, 10);                         break;
+    case ARG_ULONG:       *((unsigned long *)write_addr) = strtoul(strval, NULL, 10);               break;
+    case ARG_LONG_LONG:   *((long long *)write_addr) = strtoll(strval, NULL, 10);                   break;
+    case ARG_ULONG_LONG:  *((unsigned long long *)write_addr) = strtoull(strval, NULL, 10);         break;
+    case ARG_FLOAT:       *((float *)write_addr) = strtof(strval, NULL);                            break;
+    case ARG_DOUBLE:      *((double *)write_addr) = strtod(strval, NULL);                           break;
+    case ARG_STRING:      *((char **)write_addr) = strdup(strval);                                  break;
+    }
+}
+// clang-format on
 
 typedef struct ArgumentParser {
     char *prog;
@@ -257,130 +283,199 @@ Argument *findflag(ArgumentParser *parser, char *str) {
     return NULL;
 }
 
-int get_argtype_size(ArgumentType type) {
-    switch (type) {
+Argument *findnextpositional(ArgumentParser *parser) {
+    Argument *arg = NULL;
+    for (size_t j = 0; j < parser->args_count; j++) {
+        arg = &parser->args[j];
+        if (arg->positional) {
+            return arg;
+        }
+    }
+    return NULL;
+}
+
+//clang-format off
+void set_arg_dest(Argument *arg, ArgumentValue value) {
+    switch (arg->type) {
+    case ARG_BOOL:       *(bool *)arg->dest = (value.b);                  break;
+    case ARG_CHAR:       *(char *)arg->dest = (value.c);                  break;
+    case ARG_UCHAR:      *(unsigned char *)arg->dest = (value.uc);        break;
+    case ARG_INT:        *(int *)arg->dest = (value.i);                   break;
+    case ARG_UINT:       *(unsigned int *)arg->dest = (value.ui);         break;
+    case ARG_LONG:       *(long *)arg->dest = (value.l);                  break;
+    case ARG_ULONG:      *(unsigned long *)arg->dest = (value.ul);        break;
+    case ARG_LONG_LONG:  *(long long *)arg->dest = (value.ll);            break;
+    case ARG_ULONG_LONG: *(unsigned long long *)arg->dest = (value.ull);  break;
+    case ARG_FLOAT:      *(float *)arg->dest = (value.f);                 break;
+    case ARG_DOUBLE:     *(double *)arg->dest = (value.d);                break;
+    case ARG_STRING:     *(char **)arg->dest = strdup(value.s);           break;
+    }
+}
+//clang-format on
+
+void append_value_to_dest(Argument *arg, ArgumentValue val) {
+    int cur = arg->dest_arr_count ? *arg->dest_arr_count : 0;
+    int sz = get_argtype_size(arg->type);
+
+    void *newbuf = realloc(*(void **)arg->dest, sz * (cur + 1));
+    if (!newbuf) {
+        perror("realloc");
+        return;
+    }
+    *(void **)arg->dest = newbuf;
+//clang-format off
+    /* записываем значение в конец массива */
+    void *slot = (char *)newbuf + cur * sz;
+    switch (arg->type) {
+    case ARG_BOOL:       *(bool *)slot = val.b;                 break;
+    case ARG_CHAR:       *(char *)slot = val.c;                 break;
+    case ARG_UCHAR:      *(unsigned char *)slot = val.uc;       break;
+    case ARG_INT:        *(int *)slot = val.i;                  break;
+    case ARG_UINT:       *(unsigned int *)slot = val.ui;        break;
+    case ARG_LONG:       *(long *)slot = val.l;                 break;
+    case ARG_ULONG:      *(unsigned long *)slot = val.ul;       break;
+    case ARG_LONG_LONG:  *(long long *)slot = val.ll;           break;
+    case ARG_ULONG_LONG: *(unsigned long long *)slot = val.ull; break;
+    case ARG_FLOAT:      *(float *)slot = val.f;                break;
+    case ARG_DOUBLE:     *(double *)slot = val.d;               break;
+    case ARG_STRING:     *(char **)slot = strdup(val.s);        break;
+    }
+
+    if (arg->dest_arr_count)
+        (*arg->dest_arr_count)++;
+}
+//clang-format on
+
+/* считать одно строковое значение и вернуть как ArgumentValue */
+ArgumentValue strval_to_argval(Argument *arg, char *strval) {
+    ArgumentValue v = {0};
+    switch (arg->type) {
     case ARG_CHAR:
+        v.c = (char)atoi(strval);
+        break;
     case ARG_UCHAR:
-        return sizeof(char);
+        v.uc = (unsigned char)atoi(strval);
+        break;
     case ARG_INT:
+        v.i = atoi(strval);
+        break;
     case ARG_UINT:
-        return sizeof(int);
+        v.ui = (unsigned int)strtoul(strval, NULL, 10);
+        break;
     case ARG_LONG:
+        v.l = strtol(strval, NULL, 10);
+        break;
     case ARG_ULONG:
-        return sizeof(long);
+        v.ul = strtoul(strval, NULL, 10);
+        break;
     case ARG_LONG_LONG:
+        v.ll = strtoll(strval, NULL, 10);
+        break;
     case ARG_ULONG_LONG:
-        return sizeof(long long);
-    case ARG_STRING:
-        return sizeof(char *);
-    case ARG_BOOL:
-        return sizeof(bool);
+        v.ull = strtoull(strval, NULL, 10);
+        break;
     case ARG_FLOAT:
-        return sizeof(float);
+        v.f = strtof(strval, NULL);
+        break;
     case ARG_DOUBLE:
-        return sizeof(double);
+        v.d = strtod(strval, NULL);
+        break;
+    case ARG_STRING:
+        v.s = strval; /* не strdup — только для чтения */
+        break;
     default:
         break;
     }
+    return v;
 }
 
-void parse_args(ArgumentParser *parser, int argc, char **args) {
-    for (size_t i = 0; i < argc; i++) {
-        bool optional = isprefix(parser, args[i][0]);
+/* ────────────── вспомогательный макрос для инкремента счётчика ──────── */
+#define COUNT_INC(arg)                                                                             \
+    do {                                                                                           \
+        switch ((arg)->type) {                                                                     \
+        case ARG_CHAR:                                                                             \
+            (*(char *)(arg)->dest)++;                                                              \
+            break;                                                                                 \
+        case ARG_UCHAR:                                                                            \
+            (*(unsigned char *)(arg)->dest)++;                                                     \
+            break;                                                                                 \
+        case ARG_INT:                                                                              \
+            (*(int *)(arg)->dest)++;                                                               \
+            break;                                                                                 \
+        case ARG_UINT:                                                                             \
+            (*(unsigned int *)(arg)->dest)++;                                                      \
+            break;                                                                                 \
+        case ARG_LONG:                                                                             \
+            (*(long *)(arg)->dest)++;                                                              \
+            break;                                                                                 \
+        case ARG_ULONG:                                                                            \
+            (*(unsigned long *)(arg)->dest)++;                                                     \
+            break;                                                                                 \
+        case ARG_LONG_LONG:                                                                        \
+            (*(long long *)(arg)->dest)++;                                                         \
+            break;                                                                                 \
+        case ARG_ULONG_LONG:                                                                       \
+            (*(unsigned long long *)(arg)->dest)++;                                                \
+            break;                                                                                 \
+        default:                                                                                   \
+            break;                                                                                 \
+        }                                                                                          \
+    } while (0)
+
+void parse_args(ArgumentParser *parser, int argc, char **argv) {
+    for (int i = 0; i < argc; i++) {
+        bool optional = isprefix(parser, argv[i][0]);
         Argument *arg = NULL;
         if (!optional) {
-            bool found = false;
-            for (size_t j = 0; j < parser->args_count; j++) {
-                arg = &parser->args[j];
-                if (!arg->is_optional && !arg->has_value) {
-                    argument_read_value(arg, args[i], false, 0);
-                    arg->has_value = true;
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                fprintf(stderr, "error: unexpected positional argument: %s\n", args[i]);
+            arg = findnextpositional(parser);
+            if (!arg) {
+                fprintf(stderr, "error: unexpected positional argument: %s\n", argv[i]);
                 if (parser->exit_on_error) {
                     exit(-1);
                 }
-            }
-            continue; // не идём в цикл по флагам
-        }
-
-        arg = findflag(parser, args[i]);
-        if (!arg) {
-            fprintf(stderr, "Unrecongnized argument: %s\n", args[i]);
-            if (parser->exit_on_error) {
-                exit(-1);
-            }
-        }
-        if (arg->has_value) {
-            fprintf(stderr, "error: argument %s: expected one argument", arg->flags[0]);
-            if (parser->exit_on_error) {
-                exit(-1);
-            }
-        }
-
-        if (arg->type == ARG_BOOL) {
-            *((bool *)arg->dest) = true;
-            arg->has_value = true;
-            continue;
-        } else {
-            if (arg->nargs_type == NARGS_NONE) {
-                i++;
-                if (i >= argc || findflag(parser, args[i])) {
-                    fprintf(stderr, "error: argument %s: expected value", arg->flags[0]);
-                    if (parser->exit_on_error) {
-                        exit(-1);
-                    }
-                } else {
-                    /* try parse value from char* to arg->type */
-                    argument_read_value(arg, args[i], false, 0);
-                    arg->has_value = true;
-                }
             } else {
                 switch (arg->nargs_type) {
+                case NARGS_NONE: {
+                    argument_read_value(arg, argv[i], false, 0);
+                } break;
+                case NARGS_OPTIONAL: {
+                    i++;
+                    if (i < argc && !findflag(parser, argv[i])) {
+                        if (!(*(void **)(arg->dest))) {
+                            *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
+                        }
+                        argument_read_value(arg, argv[i], false, 0);
+                        arg->has_value = true;
+                        *(arg->dest_arr_count) = 1;
+                    } else {
+                        i--;
+                    }
+                } break;
                 case NARGS_CONST: {
                     if (!(*(void **)(arg->dest))) {
                         *((void **)(arg->dest)) =
                             malloc(get_argtype_size(arg->type) * arg->nargs_count);
                     }
-                    for (size_t ii = 0; ii < arg->nargs_count; ii++) {
-                        i++;
-                        if (i >= argc || findflag(parser, args[i])) {
+                    for (size_t ii = 0; ii < arg->nargs_count; ii++, i++) {
+                        if (i >= argc || findflag(parser, argv[i])) {
                             fprintf(stderr, "error: argument %s: expected exact %d values",
                                     arg->flags[0], arg->nargs_count);
                             if (parser->exit_on_error) {
                                 exit(-1);
                             }
                         } else {
-                            argument_read_value(arg, args[i], true, ii);
+                            argument_read_value(arg, argv[i], true, ii);
                         }
                     }
+                    i--;
                     arg->has_value = true;
                     if (arg->dest_arr_count) {
                         *(arg->dest_arr_count) = arg->nargs_count;
                     }
-                    break;
-                }
-                case NARGS_OPTIONAL: {
-                    i++;
-                    if (i < argc && !findflag(parser, args[i])) {
-                        if (!(*(void **)(arg->dest))) {
-                            *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
-                        }
-                        argument_read_value(arg, args[i], false, 0);
-                        arg->has_value = true;
-                        *(arg->dest_arr_count) = 1;
-                    } else {
-                        i--;
-                    }
-                    break;
-                }
+                } break;
                 case NARGS_ZERO_PLUS: {
                     i++;
-                    if (i >= argc || findflag(parser, args[i])) {
+                    if (i >= argc || findflag(parser, argv[i])) {
                         i--;
                     } else {
                         if (!(*(void **)(arg->dest))) {
@@ -388,11 +483,11 @@ void parse_args(ArgumentParser *parser, int argc, char **args) {
                         }
                         arg->nargs_count = 0;
                         int offset = 0;
-                        while (i < argc && !findflag(parser, args[i])) {
+                        while (i < argc && !findflag(parser, argv[i])) {
                             *((void **)(arg->dest)) =
                                 realloc(*((void **)(arg->dest)),
                                         get_argtype_size(arg->type) * (arg->nargs_count + 1));
-                            argument_read_value(arg, args[i], true, offset);
+                            argument_read_value(arg, argv[i], true, offset);
                             arg->nargs_count++;
                             offset++;
                             i++;
@@ -400,11 +495,11 @@ void parse_args(ArgumentParser *parser, int argc, char **args) {
                         i--;
                         *(arg->dest_arr_count) = arg->nargs_count;
                     }
-                    break;
-                }
+
+                } break;
                 case NARGS_ONE_PLUS: {
                     i++;
-                    if (i >= argc || findflag(parser, args[i])) {
+                    if (i >= argc || findflag(parser, argv[i])) {
                         fprintf(stderr, "error: argument %s: expected at least 1 value",
                                 arg->flags[0]);
                         if (parser->exit_on_error) {
@@ -422,32 +517,212 @@ void parse_args(ArgumentParser *parser, int argc, char **args) {
                                 realloc(*((void **)(arg->dest)),
                                         get_argtype_size(arg->type) *
                                             (arg->nargs_count > 0 ? arg->nargs_count : 1));
-                            argument_read_value(arg, args[i], true, offset);
+                            argument_read_value(arg, argv[i], true, offset);
                             arg->nargs_count++;
                             offset++;
                             i++;
-                        } while (i < argc && !findflag(parser, args[i]));
+                        } while (i < argc && !findflag(parser, argv[i]));
                         i--;
                         *(arg->dest_arr_count) = arg->nargs_count;
-                        break;
                     }
-                    break;
-                }
+
+                } break;
                 default:
                     break;
                 }
+                arg->has_value = true;
             }
+            continue; // не идём в цикл по флагам
+        }
+
+        arg = findflag(parser, argv[i]);
+        if (!arg) {
+            // возможно, короткий флаг, повторенный N раз, или несколько коротких флагов
+            // TODO
+            fprintf(stderr, "Unrecongnized argument: %s\n", argv[i]);
+            if (parser->exit_on_error) {
+                exit(-1);
+            }
+        }
+        // проверям всякое
+        if ((arg->action != ACTION_APPEND && arg->has_value) ||
+            (arg->action != ACTION_APPEND_CONST && arg->has_value) ||
+            (arg->action != ACTION_COUNT)) {
+            // перепоявление флага, атата
+            fprintf(stderr, "error: argument %s: expected one argument", arg->flags[0]);
+            if (parser->exit_on_error) {
+                exit(-1);
+            }
+        }
+        switch (arg->action) {
+        case ACTION_STORE: {
+            if (arg->type == ARG_BOOL) {
+                *((bool *)arg->dest) = true;
+                arg->has_value = true;
+                continue;
+            } else {
+                if (arg->nargs_type == NARGS_NONE) {
+                    i++;
+                    if (i >= argc || findflag(parser, argv[i])) {
+                        fprintf(stderr, "error: argument %s: expected value", arg->flags[0]);
+                        if (parser->exit_on_error) {
+                            exit(-1);
+                        }
+                    } else {
+                        /* try parse value from char* to arg->type */
+                        argument_read_value(arg, argv[i], false, 0);
+                        arg->has_value = true;
+                    }
+                } else {
+                    switch (arg->nargs_type) {
+                    case NARGS_CONST: {
+                        if (!(*(void **)(arg->dest))) {
+                            *((void **)(arg->dest)) =
+                                malloc(get_argtype_size(arg->type) * arg->nargs_count);
+                        }
+                        for (size_t ii = 0; ii < arg->nargs_count; ii++) {
+                            i++;
+                            if (i >= argc || findflag(parser, argv[i])) {
+                                fprintf(stderr, "error: argument %s: expected exact %d values",
+                                        arg->flags[0], arg->nargs_count);
+                                if (parser->exit_on_error) {
+                                    exit(-1);
+                                }
+                            } else {
+                                argument_read_value(arg, argv[i], true, ii);
+                            }
+                        }
+                        arg->has_value = true;
+                        if (arg->dest_arr_count) {
+                            *(arg->dest_arr_count) = arg->nargs_count;
+                        }
+                        break;
+                    }
+                    case NARGS_OPTIONAL: {
+                        i++;
+                        if (i < argc && !findflag(parser, argv[i])) {
+                            if (!(*(void **)(arg->dest))) {
+                                *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
+                            }
+                            argument_read_value(arg, argv[i], false, 0);
+                            arg->has_value = true;
+                            *(arg->dest_arr_count) = 1;
+                        } else {
+                            i--;
+                        }
+                        break;
+                    }
+                    case NARGS_ZERO_PLUS: {
+                        i++;
+                        if (i >= argc || findflag(parser, argv[i])) {
+                            i--;
+                        } else {
+                            if (!(*(void **)(arg->dest))) {
+                                *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
+                            }
+                            arg->nargs_count = 0;
+                            int offset = 0;
+                            while (i < argc && !findflag(parser, argv[i])) {
+                                *((void **)(arg->dest)) =
+                                    realloc(*((void **)(arg->dest)),
+                                            get_argtype_size(arg->type) * (arg->nargs_count + 1));
+                                argument_read_value(arg, argv[i], true, offset);
+                                arg->nargs_count++;
+                                offset++;
+                                i++;
+                            }
+                            i--;
+                            *(arg->dest_arr_count) = arg->nargs_count;
+                        }
+                        break;
+                    }
+                    case NARGS_ONE_PLUS: {
+                        i++;
+                        if (i >= argc || findflag(parser, argv[i])) {
+                            fprintf(stderr, "error: argument %s: expected at least 1 value",
+                                    arg->flags[0]);
+                            if (parser->exit_on_error) {
+                                exit(-1);
+                            }
+                        } else {
+                            if (!(*(void **)(arg->dest))) {
+                                *((void **)(arg->dest)) = malloc(get_argtype_size(arg->type));
+                            }
+                            int offset = 0;
+                            arg->nargs_count = 0;
+                            do {
+
+                                *((void **)(arg->dest)) =
+                                    realloc(*((void **)(arg->dest)),
+                                            get_argtype_size(arg->type) *
+                                                (arg->nargs_count > 0 ? arg->nargs_count : 1));
+                                argument_read_value(arg, argv[i], true, offset);
+                                arg->nargs_count++;
+                                offset++;
+                                i++;
+                            } while (i < argc && !findflag(parser, argv[i]));
+                            i--;
+                            *(arg->dest_arr_count) = arg->nargs_count;
+                            break;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                }
+            }
+
+        } break;
+        case ACTION_STORE_TRUE: {
+            *(bool *)arg->dest = true;
+            arg->has_value = true;
+        } break;
+        case ACTION_STORE_FALSE: {
+            *(bool *)arg->dest = false;
+            arg->has_value = true;
+        } break;
+        case ACTION_STORE_CONST: {
+            set_arg_dest(arg, arg->const_val);
+            arg->has_value = true;
+        } break;
+        case ACTION_COUNT: {
+            COUNT_INC(arg);
+        } break;
+        case ACTION_APPEND: {
+            i++;
+            if (i >= argc || findflag(parser, argv[i])) {
+                fprintf(stderr, "Флаг есть, а значения нет");
+                if (parser->exit_on_error) {
+                    exit(-1);
+                }
+            }
+
+            if (arg->nargs_type != NARGS_NONE) {
+                perror("NARGS not supported for ACTION_APPEND");
+                exit(-1);
+            }
+            append_value_to_dest(arg, strval_to_argval(arg, argv[i]));
+        } break;
+        case ACTION_APPEND_CONST: {
+            append_value_to_dest(arg, arg->const_val);
+        } break;
+        default:
+            break;
         }
     }
 
     bool found = false;
     for (size_t j = 0; j < parser->args_count; j++) {
         Argument *arg = &parser->args[j];
-        if (!arg->is_optional && !arg->has_value) {
-            fprintf(stderr, "Positional argument \"%s\" not set", arg->flags[0]);
+        if (arg->required && !arg->has_value) {
+            fprintf(stderr, "Required argument \"%s\" not set", arg->flags[0]);
             if (parser->exit_on_error) {
                 exit(-1);
             }
+        }
+        if (!arg->has_value && arg->action != ACTION_STORE_CONST) {
+            set_arg_dest(arg, arg->default_val);
         }
     }
 }
@@ -457,34 +732,37 @@ typedef struct {
     ArgumentType type;
     NargsType nargs;
     bool required;
+    bool optional;
     int count;
     int *dest_count;
+    ArgumentValue const_val;
+    ArgumentValue default_val;
 } ArgumentOptions;
 
 void validate_arg_flags(ArgumentParser *parser, Argument *arg) {
+    bool need_prefix = false;
+    int prefix_count = 0;
     for (size_t i = 0; i < arg->flags_count; i++) {
         char *flag = arg->flags[i];
 
-        bool pref = isprefix(parser, flag[0]);
-
-        if (!arg->is_optional && pref) {
-            arg->is_optional = true;
+        need_prefix = isprefix(parser, flag[0]);
+        if (need_prefix) {
+            prefix_count++;
         }
-
-        if (arg->is_optional && !pref) {
-            fprintf(stderr, "All optional flags must start with prefix");
-            if (parser->exit_on_error) {
-                exit(-1);
-            }
-        }
-
-        if (!arg->is_optional && !pref && i >= 1) {
+        if (!arg->is_optional && !need_prefix && i >= 1) {
             fprintf(stderr, "Positional argument should be only one "
                             "given in _flags_ parameter");
 
             if (parser->exit_on_error) {
                 exit(-1);
             }
+        }
+    }
+    if (need_prefix && prefix_count != arg->flags_count) {
+
+        fprintf(stderr, "All flags must start with prefix");
+        if (parser->exit_on_error) {
+            exit(-1);
         }
     }
 }
@@ -503,20 +781,56 @@ void __add_argument_base(ArgumentParser *parser, const char *flags, void *dest,
     arg->flags_count = res.count;
 
     validate_arg_flags(parser, arg);
+    if (arg->flags_count == 1 && !isprefix(parser, arg->flags[0][0])) {
+        arg->positional = true;
+    }
 
     arg->dest = dest;
+    arg->dest_arr_count = opt.dest_count;
     arg->type = opt.type;
     arg->action = opt.action;
     if (opt.required) {
-        arg->required = opt.required;
+        arg->required = true;
         arg->is_optional = false;
+    }
+    if (opt.optional) {
+        arg->required = false;
+        arg->is_optional = true;
     }
 
     arg->nargs_type = opt.nargs;
-    if (opt.nargs >= 0) { // NONE OR CONST
+    if (opt.nargs > 0) { // CONST
+
+        arg->nargs_type = NARGS_CONST;
         if (opt.count) {
-            arg->nargs_type = NARGS_CONST;
             arg->nargs_count = opt.count;
+        } else {
+            arg->nargs_count = opt.nargs;
+        }
+    }
+    arg->const_val = opt.const_val;
+    arg->default_val = opt.default_val;
+    if (arg->type == ARG_BOOL && arg->nargs_type != NARGS_NONE) { // массив булов, ай ай ай
+        fprintf(stderr, "error: boolean flags can't contain any values");
+        if (parser->exit_on_error) {
+            exit(-1);
+        }
+    }
+
+    if (arg->action == ACTION_COUNT && (arg->nargs_type != NARGS_NONE || arg->nargs_count != 0)) {
+        fprintf(stderr, "error: countable flags cant store nargs values");
+        if (parser->exit_on_error) {
+            exit(-1);
+        }
+    }
+
+    if (!arg->is_optional &&
+        (arg->action != ACTION_STORE &&
+         arg->action != ACTION_APPEND)) { // wrong action for positional argument
+        fprintf(stderr,
+                "error: wrong action for positional argument, supports only STORE and APPEND");
+        if (parser->exit_on_error) {
+            exit(-1);
         }
     }
 }
