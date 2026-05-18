@@ -24,6 +24,15 @@ int main(int argc, char **argv) {
 
     add_argument(parser, "numbers", &numbers, .type = ARG_INT, .nargs = NARGS_ONE_PLUS,
                  .dest_count = &numbers_count, .action = ACTION_STORE);
+    
+    /* some single-letter flags for -bn */
+    bool ba = false, bb = false;;
+    add_argument(parser, "-b --ba", &ba, .type=ARG_BOOL);
+    add_argument(parser, "-n --bb", &bb, .type=ARG_BOOL);
+    
+    /* now  supports -vvv */
+    int verbose = 0;
+    add_argument(parser, "-v --verbose", &verbose, .type=ARG_INT, .action=ACTION_COUNT);
 
     /* parse CLI */
     parse_args(parser, argc - 1, argv + 1);
@@ -41,7 +50,9 @@ int main(int argc, char **argv) {
     for (int i = 0; i < numbers_count; i++) {
         printf("  %d\n", numbers[i]);
     }
-
+    printf("Ba = %d\n", ba);
+    printf("Bb = %d\n", bb);
+    printf("Verbosity level = %d\n", verbose);
     /* cleanup */
     parser_free(parser);
 

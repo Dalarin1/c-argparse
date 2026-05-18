@@ -400,6 +400,31 @@ void count_inc(Argument *arg) {
 }
 // clang-format on
 
+bool is_single_letter_flag(ArgumentParser *parser, char *flag) {
+    // fetch first letter. If it is flag -> check other letters.
+    int offset = 0; // skip the '-'
+    size_t len = strlen(flag) - 1;
+    // findflag работает для -flag, т.е. надо добавлять - к каждой букве
+    char *buf = malloc(sizeof(char) * 3);
+    buf[0] = '-';
+    buf[1] = flag[1];
+    buf[2] = 0;
+    if (findflag(parser, buf)) {
+        offset += 2;
+        for (size_t i = 0; i < len - 1; i++) {
+            buf[1] = flag[offset++];
+            if (!findflag(parser, buf)) {
+                return false;
+            }
+        }
+        free(buf);
+        return true;
+    } else {
+        free(buf);
+        return false;
+    }
+}
+
 void parse_args(ArgumentParser *parser, int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
         bool optional = isprefix(parser, argv[i][0]);
@@ -500,11 +525,44 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
 
         arg = findflag(parser, argv[i]);
         if (!arg) {
-            // возможно, короткий флаг, повторенный N раз, или несколько коротких флагов
-            // TODO
-            fprintf(stderr, "Unrecongnized argument: %s\n", argv[i]);
-            if (parser->exit_on_error) {
-                exit(-1);
+            bool single = is_single_letter_flag(parser, argv[i]);
+
+            if (single) {
+                char *buf = malloc(sizeof(char) * 3);
+                buf[0] = '-';
+                buf[1] = 0;
+                buf[2] = 0;
+                size_t len = strlen(argv[i]);
+                for (int j = 1; j < len; j++) {
+                    buf[1] = argv[i][j];
+                    arg = findflag(parser, buf);
+                    if (!arg) {
+                        fprintf(stderr, "Unrecongnized argument: %s\n", argv[i]);
+                        if (parser->exit_on_error) {
+                            exit(-1);
+                        }
+                    } else {
+                        if (arg->action == ACTION_COUNT) {
+                            count_inc(arg);
+                            arg->has_value = true;
+                        } else if (arg->action == ACTION_STORE && arg->type == ARG_BOOL) {
+                            *(bool *)arg->dest = true;
+                            arg->has_value = true;
+                        } else {
+                            fprintf(stderr, "Unrecongnized argument: %s\n", argv[i]);
+                            if (parser->exit_on_error) {
+                                exit(-1);
+                            }
+                        }
+                    }
+                }
+                free(buf);
+                continue;
+            } else {
+                fprintf(stderr, "Unrecongnized argument: %s\n", argv[i]);
+                if (parser->exit_on_error) {
+                    exit(-1);
+                }
             }
         }
         // проверям всякое
