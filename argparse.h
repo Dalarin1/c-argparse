@@ -160,7 +160,7 @@ int get_argtype_size(ArgumentType type) {
     case ARG_DOUBLE:
         return sizeof(double);
     default:
-        break;
+        return -1;
     }
 }
 void *get_write_addr(Argument *arg, bool to_arr, int offset) {
@@ -425,11 +425,13 @@ bool is_single_letter_flag(ArgumentParser *parser, char *flag) {
     }
 }
 
+// TODO
+// 1. add support for -flag=value -flag="value_1 value_2 ..."
 void parse_args(ArgumentParser *parser, int argc, char **argv) {
     for (int i = 0; i < argc; i++) {
-        bool optional = isprefix(parser, argv[i][0]);
-        Argument *arg = NULL;
-        if (!optional) {
+        Argument *arg = findflag(parser, argv[i]);
+        bool single = is_single_letter_flag(parser, argv[i]);
+        if (!arg && !single) {
             arg = findnextpositional(parser);
             if (!arg) {
                 fprintf(stderr, "error: unexpected positional argument: %s\n", argv[i]);
@@ -460,7 +462,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                             malloc(get_argtype_size(arg->type) * arg->nargs_count);
                     }
                     for (size_t ii = 0; ii < arg->nargs_count; ii++, i++) {
-                        if (i >= argc || findflag(parser, argv[i])) {
+                        if (i >= argc || findflag(parser, argv[i]) || is_single_letter_flag(parser, argv[i])) {
                             fprintf(stderr, "error: argument %s: expected exact %d values",
                                     arg->flags[0], arg->nargs_count);
                             if (parser->exit_on_error) {
@@ -481,7 +483,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                     }
                     arg->nargs_count = 0;
                     int offset = 0;
-                    while (i < argc && !findflag(parser, argv[i])) {
+                    while (i < argc && !findflag(parser, argv[i]) && !is_single_letter_flag(parser, argv[i])) {
                         *((void **)(arg->dest)) =
                             realloc(*((void **)(arg->dest)),
                                     get_argtype_size(arg->type) * (arg->nargs_count + 1));
@@ -510,7 +512,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                         arg->nargs_count++;
                         offset++;
                         i++;
-                    } while (i < argc && !findflag(parser, argv[i]));
+                    } while (i < argc && !findflag(parser, argv[i]) && !is_single_letter_flag(parser, argv[i]));
                     i--;
                     *(arg->dest_arr_count) = arg->nargs_count;
 
@@ -523,10 +525,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
             continue; // не идём в цикл по флагам
         }
 
-        arg = findflag(parser, argv[i]);
-        if (!arg) {
-            bool single = is_single_letter_flag(parser, argv[i]);
-
+        if (!arg && single) {
             if (single) {
                 char *buf = malloc(sizeof(char) * 3);
                 buf[0] = '-';
@@ -566,9 +565,9 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
             }
         }
         // проверям всякое
-        if ((arg->action != ACTION_APPEND && arg->has_value) &&
-            (arg->action != ACTION_APPEND_CONST && arg->has_value) &&
-            (arg->action != ACTION_COUNT)) {
+        else if ((arg->action != ACTION_APPEND && arg->has_value) &&
+                 (arg->action != ACTION_APPEND_CONST && arg->has_value) &&
+                 (arg->action != ACTION_COUNT)) {
             // перепоявление флага, атата
             fprintf(stderr, "error: argument %s: expected one argument", arg->flags[0]);
             if (parser->exit_on_error) {
@@ -584,7 +583,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
             } else {
                 if (arg->nargs_type == NARGS_NONE) {
                     i++;
-                    if (i >= argc || findflag(parser, argv[i])) {
+                    if (i >= argc || findflag(parser, argv[i]) || is_single_letter_flag(parser, argv[i])) {
                         fprintf(stderr, "error: argument %s: expected value", arg->flags[0]);
                         if (parser->exit_on_error) {
                             exit(-1);
@@ -603,7 +602,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                         }
                         for (size_t ii = 0; ii < arg->nargs_count; ii++) {
                             i++;
-                            if (i >= argc || findflag(parser, argv[i])) {
+                            if (i >= argc || findflag(parser, argv[i]) || is_single_letter_flag(parser, argv[i])) {
                                 fprintf(stderr, "error: argument %s: expected exact %d values",
                                         arg->flags[0], arg->nargs_count);
                                 if (parser->exit_on_error) {
@@ -643,7 +642,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                             }
                             arg->nargs_count = 0;
                             int offset = 0;
-                            while (i < argc && !findflag(parser, argv[i])) {
+                            while (i < argc && !findflag(parser, argv[i]) && !is_single_letter_flag(parser, argv[i])) {
                                 *((void **)(arg->dest)) =
                                     realloc(*((void **)(arg->dest)),
                                             get_argtype_size(arg->type) * (arg->nargs_count + 1));
@@ -678,7 +677,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
                                 argument_read_value(arg, argv[i], true, offset);
                                 offset++;
                                 i++;
-                            } while (i < argc && !findflag(parser, argv[i]));
+                            } while (i < argc && !findflag(parser, argv[i]) && !is_single_letter_flag(parser, argv[i]));
                             i--;
                             *(arg->dest_arr_count) = arg->nargs_count;
                             break;
@@ -710,7 +709,7 @@ void parse_args(ArgumentParser *parser, int argc, char **argv) {
         } break;
         case ACTION_APPEND: {
             i++;
-            if (i >= argc || findflag(parser, argv[i])) {
+            if (i >= argc || findflag(parser, argv[i]) || is_single_letter_flag(parser, argv[i])) {
                 fprintf(stderr, "Флаг есть, а значения нет");
                 if (parser->exit_on_error) {
                     exit(-1);
